@@ -1,54 +1,80 @@
 const express = require("express");
-const Alert = require("../models/Alert");
-const CompletedAlert = require("../models/CompletedAlert"); // Nuevo modelo para alertas completadas
-const User = require("../models/User");
-
 const router = express.Router();
 
+const Alert = require("../models/Alert");
+const CompletedAlert = require("../models/CompletedAlert");
+const User = require("../models/User");
+
 module.exports = (io) => {
-  // Función para mover alerta al historial
-  const moveAlertToHistory = async (alert, userInfo) => {
+  // Función para mover una alerta al historial
+  const moveAlertToHistory = async (alert, userInfo, comment = "") => {
     const completedAlert = new CompletedAlert({
       userId: alert.userId,
       lat: alert.lat,
       lng: alert.lng,
       userInfo,
       completedAt: new Date(),
+      comment: comment || "Sin comentario",
     });
 
-    await completedAlert.save(); // Guardar en la colección de alertas completadas
-    await Alert.findByIdAndDelete(alert._id); // Eliminar de alertas activas
+    await completedAlert.save();   // Guardar en "CompletedAlert"
+    await Alert.findByIdAndDelete(alert._id); // Eliminar de "Alert"
   };
 
-  // Ruta de prueba para verificar si las rutas están funcionando
-  router.get("/test", (req, res) => {
-    console.log("Solicitud GET /api/alerts/test recibida");
-    res.json({ message: "La ruta de alertas está funcionando correctamente." });
-  });
-
-  // Ruta para obtener todas las alertas activas
-  router.get("/", async (req, res) => {
+  // Lógica para mover alertas automáticamente tras 40 min
+  const moveAlertsToHistoryAutomatically = async () => {
     try {
-      const alerts = await Alert.find();
-      res.status(200).json(alerts);
+      const alerts = await Alert.find({ isActive: true });
+      const threshold = 40 * 60 * 1000; // 40 minutos en ms
+      const now = Date.now();
+
+      alerts.forEach(async (alert) => {
+        const timeElapsed = now - alert.createdAt.getTime();
+
+        if (timeElapsed > threshold) {
+          const user = await User.findById(alert.userId).select(
+            "nombre apellido correo direccion telefono foto"
+          );
+          const userInfo = {
+            nombre: user?.nombre || "Sin nombre",
+            apellido: user?.apellido || "Sin apellido",
+            correo: user?.correo || "Sin correo",
+            direccion: user?.direccion || "Sin dirección",
+            telefono: user?.telefono || "Sin teléfono",
+            foto: user?.foto || "placeholder.jpg",
+          };
+
+          await moveAlertToHistory(alert, userInfo);
+          console.log(`Alerta ${alert._id} movida al historial (auto).`);
+        }
+      });
     } catch (error) {
-      console.error("Error al obtener las alertas:", error);
-      res.status(500).json({ message: "Error del servidor." });
+      console.error("Error al mover alertas al historial automáticamente:", error);
     }
+  };
+
+  // Ejecutar función cada minuto
+  setInterval(moveAlertsToHistoryAutomatically, 60 * 1000);
+
+  //
+  // Rutas
+  //
+
+  // Test
+  router.get("/test", (req, res) => {
+    console.log("GET /api/alerts/test");
+    res.json({ message: "Ruta de alertas funcionando." });
   });
 
-  // Ruta para obtener alertas completadas con filtros
+  // RUTA PARA OBTENER ALERTAS COMPLETADAS
   router.get("/completed", async (req, res) => {
+    console.log("→ GET /api/alerts/completed");
     try {
       const { day, month, year } = req.query;
-
       let filter = {};
+
       if (day || month || year) {
-        const startDate = new Date(
-          year || 1970,
-          month ? month - 1 : 0,
-          day || 1
-        );
+        const startDate = new Date(year || 1970, month ? month - 1 : 0, day || 1);
         const endDate = new Date(
           year || 9999,
           month ? month - 1 : 11,
@@ -60,24 +86,33 @@ module.exports = (io) => {
       const completedAlerts = await CompletedAlert.find(filter);
       res.status(200).json(completedAlerts);
     } catch (error) {
-      console.error("Error al obtener las alertas completadas:", error);
+      console.error("Error al obtener alertas completadas:", error);
       res.status(500).json({ message: "Error del servidor." });
     }
   });
 
-  // Ruta para obtener alertas específicas de un usuario
+  // RUTA PARA TODAS LAS ALERTAS ACTIVAS
+  router.get("/", async (req, res) => {
+    console.log("→ GET /api/alerts/");
+    try {
+      const alerts = await Alert.find();
+      res.status(200).json(alerts);
+    } catch (error) {
+      console.error("Error al obtener las alertas:", error);
+      res.status(500).json({ message: "Error del servidor." });
+    }
+  });
+
+  // RUTA PARA ALERTAS DE UN USUARIO ESPECÍFICO
   router.get("/:userId", async (req, res) => {
+    console.log("→ GET /api/alerts/:userId");
     const { userId } = req.params;
     const { day, month, year } = req.query;
 
     try {
       let filter = { userId };
       if (day || month || year) {
-        const startDate = new Date(
-          year || 1970,
-          month ? month - 1 : 0,
-          day || 1
-        );
+        const startDate = new Date(year || 1970, month ? month - 1 : 0, day || 1);
         const endDate = new Date(
           year || 9999,
           month ? month - 1 : 11,
@@ -99,11 +134,12 @@ module.exports = (io) => {
 
   // Registrar o actualizar una alerta
   router.post("/", async (req, res) => {
+    console.log("→ POST /api/alerts");
     try {
       const { userId, lat, lng } = req.body;
 
       if (!userId || typeof lat !== "number" || typeof lng !== "number") {
-        return res.status(400).json({ message: "Faltan datos obligatorios o son inválidos." });
+        return res.status(400).json({ message: "Faltan datos o son inválidos." });
       }
 
       const user = await User.findById(userId);
@@ -112,13 +148,16 @@ module.exports = (io) => {
       }
 
       const userInfo = {
-        nombre: user.nombre || "Sin nombre",
-        apellido: user.apellido || "Sin apellido",
-        correo: user.correo || "Sin correo",
-        direccion: user.direccion || "Sin dirección",
-        telefono: user.telefono || "Sin teléfono",
+        nombre: user?.nombre || "Sin nombre",
+        apellido: user?.apellido || "Sin apellido",
+        correo: user?.correo || "Sin correo",
+        direccion: user?.direccion || "Sin dirección",
+        telefono: user?.telefono || "Sin teléfono",
+        foto: user?.foto || "placeholder.jpg", // <--- AQUÍ SÍ pones la foto
       };
+      
 
+      // Verificar si ya existe una alerta activa de este usuario
       let existingAlert = await Alert.findOne({ userId, isActive: true });
 
       if (existingAlert) {
@@ -141,46 +180,37 @@ module.exports = (io) => {
     }
   });
 
-  // Desactivar una alerta activa
-  router.delete("/", async (req, res) => {
+  // Eliminar una alerta activa
+  router.delete("/:alertId", async (req, res) => {
+    console.log("→ DELETE /api/alerts/:alertId");
     try {
-      const { userId } = req.body;
+      const { alertId } = req.params;
 
-      if (!userId) {
-        return res.status(400).json({ message: "Faltan datos obligatorios." });
-      }
-
-      const alert = await Alert.findOneAndUpdate(
-        { userId, isActive: true },
-        { isActive: false }
-      );
-
+      const alert = await Alert.findByIdAndDelete(alertId);
       if (!alert) {
-        return res.status(404).json({ message: "No se encontró ninguna alerta activa." });
+        return res.status(404).json({ message: "No se encontró ninguna alerta con ese ID." });
       }
 
-      const user = await User.findById(alert.userId);
-      const userInfo = {
-        nombre: user.nombre,
-        apellido: user.apellido,
-        correo: user.correo,
-        direccion: user.direccion,
-        telefono: user.telefono,
-      };
-
-      await moveAlertToHistory(alert, userInfo);
-      io.emit("alertDeactivated", { alerta: alert }); // Emitir toda la alerta
-      res.status(200).json({ message: "Alerta desactivada y movida al historial." });
+      io.emit("alertDeleted", { alerta: alert });
+      res.status(200).json({ message: "Alerta eliminada exitosamente." });
     } catch (error) {
-      console.error("Error al desactivar la alerta:", error);
+      console.error("Error al eliminar la alerta:", error);
       res.status(500).json({ message: "Error del servidor." });
     }
   });
 
   // Marcar manualmente una alerta como completada
   router.post("/complete", async (req, res) => {
+    console.log("→ POST /api/alerts/complete");
     try {
-      const { alertId } = req.body;
+      const { alertId, comment } = req.body;
+
+      // Validar longitud del comentario
+      if (comment && comment.length > 120) {
+        return res
+          .status(400)
+          .json({ message: "El comentario no debe superar los 120 caracteres." });
+      }
 
       const alert = await Alert.findById(alertId);
       if (!alert) {
@@ -189,18 +219,43 @@ module.exports = (io) => {
 
       const user = await User.findById(alert.userId);
       const userInfo = {
-        nombre: user.nombre,
-        apellido: user.apellido,
-        correo: user.correo,
-        direccion: user.direccion,
-        telefono: user.telefono,
+        nombre: user.nombre || "Sin nombre",
+        apellido: user.apellido || "Sin apellido",
+        correo: user.correo || "Sin correo",
+        direccion: user.direccion || "Sin dirección",
+        telefono: user.telefono || "Sin teléfono",
       };
 
-      await moveAlertToHistory(alert, userInfo);
-      io.emit("alertDeactivated", { alerta: alert }); // Emitir toda la alerta
-      res.status(200).json({ message: "Alerta marcada como completada." });
+      await moveAlertToHistory(alert, userInfo, comment);
+      // Notificar al cliente que la alerta se completó
+      io.emit("alertDeactivated", {
+        type: "alertDeactivated",
+        alertId,
+        userId: alert.userId,
+      });
+
+      res.status(200).json({
+        message: "Alerta marcada como completada y movida al historial.",
+      });
     } catch (error) {
       console.error("Error al completar alerta manualmente:", error);
+      res.status(500).json({ message: "Error del servidor." });
+    }
+  });
+
+  // Ruta para detener el envío de coordenadas (opcional)
+  router.post("/stop-location", async (req, res) => {
+    console.log("→ POST /api/alerts/stop-location");
+    try {
+      const { userId } = req.body;
+      if (!userId) {
+        return res.status(400).json({ message: "Falta el userId." });
+      }
+
+      io.emit("stopLocation", { type: "stopLocation", userId });
+      res.status(200).json({ message: "Ubicación detenida para el usuario." });
+    } catch (error) {
+      console.error("Error al detener la ubicación:", error);
       res.status(500).json({ message: "Error del servidor." });
     }
   });

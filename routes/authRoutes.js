@@ -11,20 +11,26 @@ const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
 router.post("/register", upload.single("foto"), async (req, res) => {
   try {
     const { nombre, apellido, dni, correo, telefono, contrasena, direccion } = req.body;
+    
+    // Si se sube una foto, se toma la ruta; si no, se asigna null
     const foto = req.file ? req.file.path : null;
 
-    if (!nombre || !apellido || !dni || !correo || !telefono || !contrasena || !direccion || !foto) {
-      return res.status(400).json({ message: "Todos los campos son obligatorios." });
+    // Verificación de campos obligatorios (foto ya no es obligatoria)
+    if (!nombre || !apellido || !dni || !correo || !telefono || !contrasena || !direccion) {
+      return res.status(400).json({ message: "Todos los campos son obligatorios, excepto la foto." });
     }
 
+    // Verificación si el correo ya está registrado
     const existingUser = await User.findOne({ correo });
     if (existingUser) {
       return res.status(400).json({ message: "El correo ya está registrado." });
     }
 
+    // Determinar el rol
     const isFirstUser = (await User.countDocuments()) === 0;
     const rol = isFirstUser ? "admin" : "user";
 
+    // Crear el nuevo usuario
     const newUser = new User({
       nombre,
       apellido,
@@ -33,10 +39,11 @@ router.post("/register", upload.single("foto"), async (req, res) => {
       telefono,
       contrasena,
       direccion,
-      foto,
+      foto, // foto es opcional
       rol,
     });
 
+    // Guardar el nuevo usuario
     await newUser.save();
     res.status(201).json({ message: "Usuario registrado con éxito.", rol });
   } catch (error) {

@@ -1,3 +1,4 @@
+// models/CompletedAlert.js
 const mongoose = require("mongoose");
 
 const completedAlertSchema = new mongoose.Schema(
@@ -11,8 +12,10 @@ const completedAlertSchema = new mongoose.Schema(
       correo: { type: String, required: false },
       direccion: { type: String, required: false },
       telefono: { type: String, required: false },
+      foto: { type: String, required: false },  // <--- Agrega este campo
     },
     completedAt: { type: Date, default: Date.now },
+    comment: { type: String, required: false, default: "Sin comentario" },
   },
   { timestamps: true }
 );
